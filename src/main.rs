@@ -33,7 +33,12 @@ async fn main() {
         tests.push((url.clone(), response));
     }
 
-    let proxy = Proxy::http(format!("http://localhost:{}", args.port))
+    test_sync(&args, tests.clone()).await;
+    test_rps(&args, tests.clone()).await;
+}
+
+fn get_proxy_client(port: u16) -> Arc<Client> {
+    let proxy = Proxy::http(format!("http://localhost:{}", port))
         .expect("error building proxy for reqwest::Client");
 
     let client = Client::builder()
@@ -41,6 +46,58 @@ async fn main() {
         .build()
         .expect("error building reqwest::Client with proxy");
 
+    Arc::new(client)
+}
+
+async fn test_sync(args: &Args, tests: Vec<(String, String)>) {
+    let clients = args.clients;
+    let port = args.port;
+
+    for (url, expected) in tests {
+        let handle = tokio::spawn(async move {
+            let client = get_proxy_client(port);
+
+            let mut handles = Vec::new();
+
+            for _ in 0..clients {
+                handles.push(tokio::spawn({
+                    let client = client.clone();
+                    let expected = expected.clone();
+                    let url = url.clone();
+
+                    async move {
+                        let actual = client
+                            .get(&url)
+                            .version(Version::HTTP_10)
+                            .send()
+                            .await
+                            .expect("error sending request")
+                            .text()
+                            .await
+                            .expect("error receiving response");
+
+                        assert_eq!(actual, expected);
+                    }
+                }));
+            }
+
+            for handle in handles {
+                handle.await.unwrap();
+            }
+        });
+
+        handle.await.unwrap();
+    }
+
+    println!(
+        "successfully got responses with {} clients for {} urls",
+        args.clients,
+        args.urls.len()
+    );
+}
+
+async fn test_rps(args: &Args, tests: Vec<(String, String)>) {
+    let client = get_proxy_client(args.port);
     let rps = args.rps;
     let client = Arc::new(client);
     let counter = Arc::new(AtomicU64::new(0));
@@ -90,7 +147,7 @@ async fn main() {
     println!();
     println!("was requesting {} urls:", args.urls.len());
 
-    for url in args.urls {
+    for url in &args.urls {
         println!("{url}");
     }
 
