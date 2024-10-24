@@ -33,8 +33,6 @@ async fn main() {
         tests.push((url.clone(), response));
     }
 
-    let mut handles = Vec::new();
-
     let proxy = Proxy::http(format!("http://localhost:{}", args.port))
         .expect("error building proxy for reqwest::Client");
 
@@ -50,17 +48,21 @@ async fn main() {
     let timer = tokio::time::Instant::now();
 
     for (url, expected) in tests {
-        handles.push(tokio::spawn({
+        tokio::spawn({
             let client = client.clone();
             let counter = counter.clone();
             async move {
+                let request = client
+                    .get(&url)
+                    .version(Version::HTTP_10)
+                    .build()
+                    .expect("error building request");
+
                 loop {
                     let start = tokio::time::Instant::now();
 
                     let actual = client
-                        .get(&url)
-                        .version(Version::HTTP_10)
-                        .send()
+                        .execute(request.try_clone().unwrap())
                         .await
                         .expect("error sending request")
                         .text()
@@ -76,7 +78,7 @@ async fn main() {
                     }
                 }
             }
-        }));
+        });
     }
 
     tokio::signal::ctrl_c().await.unwrap();
